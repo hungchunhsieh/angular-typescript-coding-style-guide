@@ -1,0 +1,1 @@
+# angular-typescript-coding-style-guide
