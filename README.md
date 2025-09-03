@@ -58,7 +58,13 @@
   - Reactive Forms 與型別安全
 - [3.5 錯誤處理模式](#35-錯誤處理模式)
 - [3.6 組件間通訊最佳實踐](#36-組件間通訊最佳實踐)
-- [3.7 Angular Control Flow 語法 (Angular 17+)](#37-angular-control-flow-語法-angular-17)
+- [3.7 Signal-based Input/Output (Angular 17.1+)](#37-signal-based-inputoutput-angular-171)
+  - 新的 input() API
+  - 新的 output() API
+  - Input/Output 型別安全
+  - 與舊 API 的比較
+  - 最佳實踐
+- [3.8 Angular Control Flow 語法 (Angular 17+)](#38-angular-control-flow-語法-angular-17)
   - 新的控制流語法概述
   - @if 條件渲染
   - @for 迴圈渲染
@@ -967,7 +973,7 @@ export class UserComponent {
 }
 ```
 
-#### 2.10.5 混合使用的最佳實踐
+#### 2.11.5 混合使用的最佳實踐
 
 ```ts
 @Component({...})
@@ -991,7 +997,7 @@ export class ModernComponent {
 }
 ```
 
-#### 2.10.6 注意事項
+#### 2.11.6 注意事項
 
 **inject() 的限制：**
 
@@ -1044,9 +1050,9 @@ Component 類別內容應按照以下順序組織，以提高程式碼可讀性�
   changeDetection: ChangeDetectionStrategy.OnPush, // 推薦明確設定
 })
 export class UserComponent implements OnInit, OnDestroy {
-  // 1. Public properties (輸入輸出屬性)
-  @Input() userId!: string;
-  @Output() userSelected = new EventEmitter<User>();
+  // 1. Signal-based input and output properties
+  userId = input.required<string>();
+  userSelected = output<User>();
 
   // 2. Public reactive properties
   public title = "User Management";
@@ -1236,7 +1242,11 @@ export class OptimizedComponent {
   selector: "app-onpush-demo",
   template: `
     <button (click)="updateCounter()">計數器: {{ counter }}</button>
-    <input [(ngModel)]="inputValue" placeholder="輸入文字" />
+    <input
+      [value]="inputValue()"
+      (input)="onInputChange($event)"
+      placeholder="輸入文字"
+    />
     <div>使用者: {{ user.name }}</div>
   `,
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -1245,13 +1255,18 @@ export class OnPushDemoComponent {
   @Input() user!: User; // 1. Input 屬性變更會觸發檢測
 
   counter = 0;
-  inputValue = "";
+  inputValue = signal("");
 
   private cdr = inject(ChangeDetectorRef);
 
   // 2. 組件內部事件會觸發檢測
   updateCounter(): void {
     this.counter++; // 這會自動觸發變更檢測
+  }
+
+  onInputChange(event: Event): void {
+    const target = event.target as HTMLInputElement;
+    this.inputValue.set(target.value);
   }
 
   // 3. 手動觸發變更檢測
@@ -1403,7 +1418,7 @@ export class OnPushLimitationsComponent {
 
 ```ts
 @Component({
-  selector: "app-modern",
+  selector: "app-user",
   template: `
     @for (item of items(); track trackByFn($index, item)) {
     <div>{{ item.name }}</div>
@@ -1437,7 +1452,113 @@ export class ModernComponent {
 
 ### 3.4 表單處理最佳實踐
 
-#### 3.4.1 Reactive Forms 與型別安全
+#### 3.4.1 避免使用 Template-driven Forms 的 [(ngModel)]
+
+**為什麼避免 `[(ngModel)]`：**
+
+- **型別安全性差**：無法提供編譯時的型別檢查
+- **效能問題**：每次變更都會觸發額外的變更檢測
+- **測試困難**：難以單元測試表單邏輯
+- **缺乏驗證支援**：驗證邏輯分散在 template 中
+- **不符合現代 Angular 最佳實踐**
+
+```ts
+// 避免：使用 [(ngModel)]
+@Component({
+  template: `
+    <input [(ngModel)]="username" placeholder="Username" />
+    <input [(ngModel)]="email" placeholder="Email" />
+  `,
+})
+export class BadFormComponent {
+  username = ""; // 無型別安全
+  email = ""; // 驗證邏輯難以管理
+}
+```
+
+#### 3.4.2 推薦：使用 Signal-based 表單管理
+
+```ts
+@Component({
+  selector: "app-modern-form",
+  template: `
+    <form (ngSubmit)="onSubmit()">
+      <input
+        [value]="username()"
+        (input)="onUsernameChange($event)"
+        placeholder="Username"
+        [class.error]="usernameError()"
+      />
+      @if (usernameError()) {
+      <span class="error-text">{{ usernameError() }}</span>
+      }
+
+      <input
+        [value]="email()"
+        (input)="onEmailChange($event)"
+        placeholder="Email"
+        [class.error]="emailError()"
+      />
+      @if (emailError()) {
+      <span class="error-text">{{ emailError() }}</span>
+      }
+
+      <button type="submit" [disabled]="!isFormValid()">Submit</button>
+    </form>
+  `,
+})
+export class ModernFormComponent {
+  // 使用 Signal 管理表單狀態
+  username = signal("");
+  email = signal("");
+
+  // 計算驗證錯誤
+  usernameError = computed(() => {
+    const value = this.username();
+    if (!value) return "Username is required";
+    if (value.length < 3) return "Username must be at least 3 characters";
+    return null;
+  });
+
+  emailError = computed(() => {
+    const value = this.email();
+    if (!value) return "Email is required";
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value))
+      return "Invalid email format";
+    return null;
+  });
+
+  isFormValid = computed(
+    () =>
+      !this.usernameError() &&
+      !this.emailError() &&
+      this.username() &&
+      this.email()
+  );
+
+  onUsernameChange(event: Event): void {
+    const target = event.target as HTMLInputElement;
+    this.username.set(target.value);
+  }
+
+  onEmailChange(event: Event): void {
+    const target = event.target as HTMLInputElement;
+    this.email.set(target.value);
+  }
+
+  onSubmit(): void {
+    if (this.isFormValid()) {
+      const formData = {
+        username: this.username(),
+        email: this.email(),
+      };
+      console.log("Form submitted:", formData);
+    }
+  }
+}
+```
+
+#### 3.4.3 Reactive Forms 與型別安全
 
 ```ts
 interface UserForm {
@@ -1561,8 +1682,8 @@ export class ParentComponent {
   template: ` <button (click)="updateData()">Update</button> `,
 })
 export class ChildComponent {
-  @Input() data!: string;
-  @Output() dataChange = new EventEmitter<string>();
+  data = input.required<string>();
+  dataChange = output<string>();
 
   updateData(): void {
     this.dataChange.emit("updated data");
@@ -1584,11 +1705,350 @@ export class ChildComponent {
 
 ---
 
-### 3.7 Angular Control Flow 語法 (Angular 17+)
+### 3.7 Signal-based Input/Output (Angular 17.1+)
+
+Angular 17.1 引入了全新的 signal-based input/output API，提供更好的型別安全性和效能。
+
+#### 3.7.1 新的 input() API
+
+**基本用法：**
+
+```ts
+import { Component, input } from "@angular/core";
+
+@Component({
+  selector: "app-user-card",
+  template: `
+    <div class="user-card">
+      <h3>{{ user().name }}</h3>
+      <p>{{ user().email }}</p>
+      @if (showActions()) {
+      <div class="actions">
+        <button>Edit</button>
+        <button>Delete</button>
+      </div>
+      }
+    </div>
+  `,
+})
+export class UserCardComponent {
+  // 必填 input
+  user = input.required<User>();
+
+  // 可選 input 帶預設值
+  showActions = input<boolean>(false);
+
+  // 可選 input 帶轉換函數
+  maxLength = input<number, string>(100, {
+    transform: (value: string) => parseInt(value, 10),
+  });
+}
+```
+
+**進階用法：**
+
+```ts
+interface TableItem {
+  id: string | number;
+  [key: string]: unknown;
+}
+
+interface TableColumn {
+  key: string;
+  label: string;
+  sortable?: boolean;
+}
+
+@Component({
+  selector: "app-data-table",
+  template: `
+    <table>
+      @for (item of paginatedData(); track trackByFn($index, item)) {
+      <tr>
+        @for (column of columns(); track column.key) {
+        <td>{{ item[column.key] }}</td>
+        }
+      </tr>
+      }
+    </table>
+    <div class="pagination">Page {{ currentPage() }} of {{ totalPages() }}</div>
+  `,
+})
+export class DataTableComponent {
+  // 使用具體型別而非 any
+  data = input.required<TableItem[]>();
+  columns = input.required<TableColumn[]>();
+
+  // 帶預設值和別名的 input
+  pageSize = input<number>(10, { alias: "itemsPerPage" });
+  currentPageInput = input<number>(1, { alias: "page" });
+
+  // Computed signals 基於 inputs
+  totalPages = computed(() => Math.ceil(this.data().length / this.pageSize()));
+
+  currentPage = computed(() =>
+    Math.max(1, Math.min(this.currentPageInput(), this.totalPages()))
+  );
+
+  paginatedData = computed(() => {
+    const start = (this.currentPage() - 1) * this.pageSize();
+    const end = start + this.pageSize();
+    return this.data().slice(start, end);
+  });
+
+  trackByFn(index: number, item: TableItem): string | number {
+    return item.id;
+  }
+}
+```
+
+#### 3.7.2 新的 output() API
+
+**基本用法：**
+
+```ts
+import { Component, output, signal } from "@angular/core";
+
+@Component({
+  selector: "app-user-form",
+  template: `
+    <form (ngSubmit)="onSubmit()">
+      <input
+        [value]="name()"
+        (input)="onNameChange($event)"
+        placeholder="Name"
+      />
+      <input
+        [value]="email()"
+        (input)="onEmailChange($event)"
+        placeholder="Email"
+      />
+      <button type="submit">Save</button>
+      <button type="button" (click)="onCancel()">Cancel</button>
+    </form>
+  `,
+})
+export class UserFormComponent {
+  // 基本 output
+  userSaved = output<User>();
+  cancelled = output<void>();
+
+  // 帶別名的 output
+  validationError = output<string>({ alias: "onValidationError" });
+
+  // 使用 Signal 管理表單狀態
+  name = signal("");
+  email = signal("");
+
+  onNameChange(event: Event): void {
+    const target = event.target as HTMLInputElement;
+    this.name.set(target.value);
+  }
+
+  onEmailChange(event: Event): void {
+    const target = event.target as HTMLInputElement;
+    this.email.set(target.value);
+  }
+
+  onSubmit(): void {
+    if (this.isValid()) {
+      const user: User = { name: this.name(), email: this.email() };
+      this.userSaved.emit(user);
+    } else {
+      this.validationError.emit("Please fill all required fields");
+    }
+  }
+
+  onCancel(): void {
+    this.cancelled.emit();
+  }
+
+  private isValid(): boolean {
+    return this.name().trim() !== "" && this.email().trim() !== "";
+  }
+}
+```
+
+#### 3.7.3 Input/Output 型別安全
+
+**強型別的 input/output：**
+
+```ts
+interface SearchOptions {
+  query: string;
+  filters: Record<string, any>;
+  sortBy?: string;
+  sortOrder?: "asc" | "desc";
+}
+
+interface SearchResult<T> {
+  items: T[];
+  total: number;
+  hasMore: boolean;
+}
+
+@Component({
+  selector: "app-search",
+  template: `
+    <div class="search-container">
+      <input
+        [value]="searchOptions().query"
+        (input)="onQueryChange($event)"
+        placeholder="Search..."
+      />
+
+      @if (loading()) {
+      <div>Searching...</div>
+      } @else { @for (item of results().items; track item.id) {
+      <div (click)="onItemSelect(item)">{{ item.name }}</div>
+      } }
+    </div>
+  `,
+})
+export class SearchComponent<T extends { id: string; name: string }> {
+  // 強型別 inputs
+  searchOptions = input.required<SearchOptions>();
+  debounceTime = input<number>(300);
+
+  // 強型別 outputs
+  search = output<SearchOptions>();
+  itemSelected = output<T>();
+  loadingChange = output<boolean>();
+
+  // 內部狀態
+  loading = signal(false);
+  results = signal<SearchResult<T>>({ items: [], total: 0, hasMore: false });
+
+  onQueryChange(event: Event): void {
+    const target = event.target as HTMLInputElement;
+    const newOptions = {
+      ...this.searchOptions(),
+      query: target.value,
+    };
+    this.search.emit(newOptions);
+  }
+
+  onItemSelect(item: T): void {
+    this.itemSelected.emit(item);
+  }
+}
+```
+
+#### 3.7.4 與舊 API 的比較
+
+| 特性         | 新 API (signal-based)       | 舊 API (@Input/@Output) |
+| ------------ | --------------------------- | ----------------------- |
+| **型別安全** | ✅ 更強的編譯時檢查         | ⚠️ 運行時檢查           |
+| **效能**     | ✅ 自動最佳化，更少變更檢測 | ❌ 需要手動優化         |
+| **可讀性**   | ✅ 直接在 template 中使用   | ⚠️ 需要額外的 getter    |
+| **轉換**     | ✅ 內建轉換函數支援         | ❌ 需要手動處理         |
+| **別名**     | ✅ 更清晰的別名支援         | ✅ 支援但語法較複雜     |
+| **預設值**   | ✅ 簡潔的預設值設定         | ⚠️ 需要額外邏輯         |
+
+#### 3.7.5 最佳實踐
+
+**1. 優先使用新的 signal-based API：**
+
+```ts
+// 推薦：新 API
+@Component({...})
+export class ModernComponent {
+  // 清晰且型別安全
+  data = input.required<User[]>();
+  pageSize = input<number>(10);
+
+  // 強型別 output
+  pageChange = output<number>();
+  userSelected = output<User>();
+}
+
+// 避免：舊 API（除非必要）
+@Component({...})
+export class LegacyComponent {
+  @Input() data!: User[];
+  @Input() pageSize = 10;
+
+  @Output() pageChange = new EventEmitter<number>();
+  @Output() userSelected = new EventEmitter<User>();
+}
+```
+
+**2. 結合 computed signals：**
+
+```ts
+@Component({...})
+export class OptimizedComponent {
+  items = input.required<Item[]>();
+  searchTerm = input<string>('');
+
+  // 自動響應 input 變化
+  filteredItems = computed(() =>
+    this.items().filter(item =>
+      item.name.toLowerCase().includes(this.searchTerm().toLowerCase())
+    )
+  );
+
+  itemCount = computed(() => this.filteredItems().length);
+}
+```
+
+**3. 使用 transform 處理型別轉換：**
+
+```ts
+@Component({...})
+export class FormComponent {
+  // 自動將字串轉為數字
+  maxLength = input<number, string>(100, {
+    transform: (value: string) => Math.max(0, parseInt(value, 10) || 0)
+  });
+
+  // 布林值轉換
+  disabled = input<boolean, string>(false, {
+    transform: (value: string) => value === 'true' || value === ''
+  });
+}
+```
+
+**4. 遷移策略：**
+
+```ts
+// 階段 1：保持舊 API 但使用 signal 處理內部狀態
+@Component({...})
+export class TransitionComponent {
+  @Input() set data(value: User[]) {
+    this.dataSignal.set(value);
+  }
+
+  private dataSignal = signal<User[]>([]);
+  protected processedData = computed(() => this.dataSignal().filter(u => u.active));
+}
+
+// 階段 2：完全遷移到新 API
+@Component({...})
+export class ModernComponent {
+  data = input.required<User[]>();
+  protected processedData = computed(() => this.data().filter(u => u.active));
+}
+```
+
+---
+
+> ### **重點總結**
+>
+> - **優先使用新的 `input()` 和 `output()` API**（Angular 17.1+）
+> - 利用 **signal-based inputs** 獲得更好的型別安全和效能
+> - 使用 **computed signals** 自動響應 input 變化
+> - 善用 **transform 函數**處理型別轉換
+> - 採用**階段性遷移策略**從舊 API 平滑過渡
+> - **保持一致性**，避免在同一個組件中混用新舊 API
+
+---
+
+### 3.8 Angular Control Flow 語法 (Angular 17+)
 
 Angular 17 引入了全新的內建控制流語法，使用 `@` 符號提供更簡潔、效能更好的結構指令替代方案。
 
-#### 3.7.1 新的控制流語法概述
+#### 3.8.1 新的控制流語法概述
 
 **優點：**
 
@@ -1597,7 +2057,7 @@ Angular 17 引入了全新的內建控制流語法，使用 `@` 符號提供更�
 - **更簡潔的語法**：減少樣板程式碼
 - **更好的 IDE 支援**：語法高亮和自動完成更準確
 
-#### 3.7.2 @if 條件渲染
+#### 3.8.2 @if 條件渲染
 
 **新語法 (`@if`)：**
 
@@ -1643,7 +2103,7 @@ track user.id) {
 </ng-template>
 ```
 
-#### 3.7.3 @for 迴圈渲染
+#### 3.8.3 @for 迴圈渲染
 
 **新語法 (`@for`)：**
 
@@ -1679,7 +2139,7 @@ $last) {
 <div *ngIf="items.length === 0">No items found</div>
 ```
 
-#### 3.7.4 @switch 條件分支
+#### 3.8.4 @switch 條件分支
 
 **新語法 (`@switch`)：**
 
@@ -1719,7 +2179,7 @@ $last) {
 </div>
 ```
 
-#### 3.7.5 與傳統結構指令的比較
+#### 3.8.5 與傳統結構指令的比較
 
 | 特性            | 新語法 (@if/@for/@switch)   | 舊語法 (*ngIf/*ngFor/\*ngSwitch) |
 | --------------- | --------------------------- | -------------------------------- |
@@ -1730,7 +2190,7 @@ $last) {
 | **IDE 支援**    | ✅ 更好的語法高亮和補全     | ⚠️ 有限的 IDE 支援               |
 | **學習曲線**    | ✅ 更容易理解               | ⚠️ 需要理解指令概念              |
 
-#### 3.7.6 最佳實踐建議
+#### 3.8.6 最佳實踐建議
 
 **1. 優先使用新的控制流語法**
 
@@ -1845,12 +2305,12 @@ export class UserListComponent {
 
 ## 4. RxJS 與訂閱管理 (Unsubscribing)
 
-### 3.1 必須正確取消訂閱
+### 4.1 必須正確取消訂閱
 
 - 未取消訂閱會造成 **記憶體洩漏 (Memory Leak)** 與 **效能問題**。\
 - 尤其在 Component Destroy 後仍存活的訂閱，可能導致非預期的行為。
 
-### 3.2 推薦做法
+### 4.2 推薦做法
 
 #### 使用 Signal (Angular 16+) - **最推薦**
 
@@ -1939,7 +2399,7 @@ ngOnDestroy() {
 }
 ```
 
-### 3.3 禁止做法
+### 4.3 禁止做法
 
 ```ts
 // 避免：手動管理太多 Subscription 物件
@@ -1952,7 +2412,7 @@ ngOnDestroy() {
 }
 ```
 
-### 3.4 Signal vs RxJS 選擇建議
+### 4.4 Signal vs RxJS 選擇建議
 
 | 情境            | 推薦方案                  | 原因                   |
 | --------------- | ------------------------- | ---------------------- |
